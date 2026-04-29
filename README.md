@@ -1,34 +1,44 @@
-# browser-agent-poc
+# Agent Capsule
 
 ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black) ![OpenSpec](https://img.shields.io/badge/OpenSpec-enforced-blueviolet) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-A browser-native AI agent for private document Q&A running entirely client-side using WebGPU/WASM with a portable model adapter interface.
+**Agent Capsule** separates agent reasoning from model execution. The agent talks to a `ModelAdapter`; adapters decide whether inference happens in WebGPU, WASM, edge, or cloud. Swap the runtime — nothing else changes.
+
+The built-in use case is **private document Q&A**: upload a PDF or text file, ask questions, get answers — entirely in the browser. No data leaves the client, no server required.
 
 ## Screenshot
 
 ![CV Q&A example — WebGPU runtime](screenshots/cv-review.png)
 
-*Uploading a CV and querying work experience entirely in-browser, no data leaves the client.*
+*Uploading a CV and querying work experience entirely in-browser — no data leaves the client.*
 
-## Running the agent
+## Limitations
+
+Read this before filing a bug.
+
+| Limitation | Detail |
+|---|---|
+| **First-load size** | ~2 GB download for the WebGPU model (Llama-3.2-3B). Cached after first use. WASM model is ~300 MB but slower. |
+| **Browser support** | WebGPU requires Chrome 113+ or Edge 113+. Firefox and Safari fall back to WASM automatically. |
+| **PDF extraction** | Text-based PDFs only. Scanned / image-only PDFs return empty text (no OCR). |
+| **Vector store** | In-memory only. Vectors are lost on page refresh. Chunk metadata is cached in `localStorage` but re-embedding is required on next upload. |
+| **Storage quota** | `localStorage` holds ~5 MB per origin. Large documents with many chunks may hit this limit. |
+| **Headless model quality** | Headless Chromium cannot use WebGPU (SwiftShader lacks `shader-f16`). The WASM fallback uses `distilgpt2` by default — fast but weak at Q&A. Use the full browser UI for quality. |
+| **Answer quality** | Answers are grounded only in retrieved chunks. If the relevant passage isn't in the top-5 results, the model will say it doesn't know. |
+
+## Install and run
+
+No build step, no bundler, no install.
 
 ```bash
 npx serve .
 # open http://localhost:3000
 ```
 
-No build step. No bundler. No install. Upload a PDF or text file and ask questions — nothing leaves your browser.
-
-## Browser requirements
-
 | Browser | Runtime | Notes |
 |---|---|---|
 | Chrome 113+ / Edge 113+ | WebGPU | Recommended — hardware-accelerated |
-| Firefox / Safari | WASM | Slower first load, same API |
-
-## First load
-
-Model weights download on first use (~2 GB for Llama-3.2-3B via WebGPU). Cached in the browser cache after the first download.
+| Firefox / Safari | WASM | Same API, slower first load |
 
 ## Architecture
 
@@ -37,39 +47,42 @@ graph TD
     User([User]) -->|uploads file| Upload[ui/upload.js]
     User -->|asks question| Chat[ui/chat.js]
 
-    Upload -->|chunks| Ingestion[Document Ingestion]
-    Ingestion -->|embed chunks| Embedder[agent/memory/embedder.js]
-    Embedder -->|store vectors| Store[agent/memory/store.js]
+    Upload -->|chunks + embeds| Store[agent/memory/store.js]
 
-    Chat -->|query| Agent[agent/agent.js ReAct loop]
-    Agent -->|retrieve top-K| Store
-    Agent -->|generate answer| Adapter[ModelAdapter]
+    Chat -->|query| Agent[agent/agent.js — ReAct loop]
+    Agent -->|retrieve top-K chunks| Store
+    Agent -->|generate| Adapter[ModelAdapter]
 
-    Adapter -->|WebGPU available| WebLLM[agent/adapter/webllm.js]
-    Adapter -->|WASM fallback| Transformers[agent/adapter/transformers.js]
+    Adapter -->|WebGPU| WebLLM[agent/adapter/webllm.js]
+    Adapter -->|WASM| Transformers[agent/adapter/transformers.js]
+    Adapter -.->|edge / cloud| Custom[your adapter]
 
     Status[ui/status.js] -->|runtime badge + progress| User
 ```
 
-## Model Adapter
+The agent loop is a simple ReAct cycle (Reason → Act → Observe) with a max of 4 iterations. On each turn it retrieves the top-5 chunks by cosine similarity, builds a grounded system prompt, and calls the adapter. If the model requests a tool call (retrieve or summarize), the loop executes it and continues; otherwise it returns the final answer.
 
-The `ModelAdapter` interface (`agent/adapter/base.js`) is the only abstraction between agent logic and the model runtime. Agent and tool code calls only:
+## The ModelAdapter interface
 
-- `adapter.generate(messages, options)` — text generation
-- `adapter.embed(text)` — returns `Float32Array`
-- `adapter.toolCall(messages, tools)` — structured tool call
+`ModelAdapter` (`agent/adapter/base.js`) is the only boundary between agent logic and model execution. Agent code, tools, and memory never import WebLLM or Transformers.js directly.
 
-To add a new runtime, extend `ModelAdapter` and update `agent/adapter/index.js`. No other files change.
+```js
+adapter.generate(messages, options)   // → string
+adapter.embed(text)                   // → Float32Array
+adapter.toolCall(messages, tools)     // → { content, tool_calls? }
+adapter.runtimeName()                 // → 'WebGPU' | 'WASM' | ...
+adapter.isReady()                     // → boolean
+```
 
-## Extending to edge / cloud
+To add a new runtime — Ollama, a cloud API, an edge worker — extend `ModelAdapter` and update the factory in `agent/adapter/index.js`. `agent.js`, all tools, and all UI files require zero changes.
 
 ```js
 import { ModelAdapter } from './agent/adapter/base.js'
 
 export class MyCloudAdapter extends ModelAdapter {
   async generate(messages, options = {}) { /* call your API */ }
-  async embed(text) { /* call your embedding API */ }
-  async toolCall(messages, tools) { /* ... */ }
+  async embed(text)                      { /* call your embedding API */ }
+  async toolCall(messages, tools)        { /* ... */ }
   runtimeName() { return 'MyCloud' }
   modelName()   { return 'my-model-v1' }
   isReady()     { return this._ready }
@@ -78,7 +91,7 @@ export class MyCloudAdapter extends ModelAdapter {
 
 ## Headless / A2A mode
 
-The agent runs in a real Chromium process with no visible UI and exposes an A2A JSON-RPC 2.0 HTTP endpoint that other agents or automation pipelines can call.
+Agent Capsule runs in a real Chromium process with no visible UI and exposes an [A2A](https://google.github.io/A2A/) JSON-RPC 2.0 HTTP endpoint that other agents or automation pipelines can call.
 
 ```bash
 cd runner
@@ -107,7 +120,7 @@ curl -X POST http://localhost:8080 \
   }'
 ```
 
-Retrieve a completed task by ID:
+Retrieve a completed task:
 
 ```bash
 curl -X POST http://localhost:8080 \
@@ -115,22 +128,18 @@ curl -X POST http://localhost:8080 \
   -d '{"jsonrpc":"2.0","method":"tasks/get","id":"2","params":{"id":"task-001"}}'
 ```
 
-### Runtime selection in headless mode
+### Headless model override
 
-Headless Chromium uses SwiftShader as its GPU backend, which does **not** support the `shader-f16` WGSL extension required by the default WebGPU model. The runner therefore masks `navigator.gpu` on startup so the adapter auto-selects the WASM/Transformers.js path — the same fallback that runs in Firefox or Safari.
-
-Additionally, TinyLlama's KV-cache tensors exceed the ONNX Runtime WebAssembly buffer limits inside Playwright's sandboxed renderer. For headless use, override the generation model to a smaller one via the `MODEL_REGISTRY_GEN_MODEL` env var:
+Headless Chromium uses SwiftShader which does not support the `shader-f16` WGSL extension required by the default WebGPU model. The runner masks `navigator.gpu` so the adapter auto-selects WASM. Override the generation model for headless use:
 
 ```bash
-# Recommended for headless: distilgpt2 (82 MB, 6 transformer layers)
+# distilgpt2: 82 MB, fast, weak Q&A — suitable for integration tests
 MODEL_REGISTRY_GEN_MODEL=Xenova/distilgpt2 node runner/start.js
 ```
 
-For full Q&A quality with an uploaded document, run the interactive browser UI instead (Chrome 113+ with WebGPU), or provide a self-hosted model server via the registry env vars below.
-
 ### Air-gap / offline deployment
 
-All model CDN URLs and model IDs live in `agent/adapter/registry.js` which checks `window.__MODEL_REGISTRY__` at startup. The runner injects this object before any module loads:
+All CDN URLs and model IDs live in `agent/adapter/registry.js`. The runner injects overrides via `window.__MODEL_REGISTRY__` before any module loads:
 
 ```bash
 MODEL_REGISTRY_WEBLLM_CDN=http://registry.internal/web-llm/esm \
@@ -140,8 +149,6 @@ MODEL_REGISTRY_GEN_MODEL=Xenova/distilgpt2 \
 node runner/start.js
 ```
 
-Nothing changes in the agent or adapter code — only the URLs the models are fetched from.
-
 ### Environment variables
 
 | Variable | Default | Description |
@@ -149,20 +156,20 @@ Nothing changes in the agent or adapter code — only the URLs the models are fe
 | `APP_PORT` | `3000` | Port for the static app server |
 | `A2A_PORT` | `8080` | Port for the A2A JSON-RPC endpoint |
 | `MODEL_TIMEOUT_MS` | `300000` | Max ms to wait for the model to load |
-| `MODEL_REGISTRY_GEN_MODEL` | `Xenova/TinyLlama-1.1B-Chat-v1.0` | Generation model (override for headless) |
+| `MODEL_REGISTRY_GEN_MODEL` | `Xenova/TinyLlama-1.1B-Chat-v1.0` | Generation model (WASM) |
 | `MODEL_REGISTRY_EMBED_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model |
-| `MODEL_REGISTRY_WEBLLM_CDN` | jsDelivr | CDN base URL for WebLLM (air-gap) |
-| `MODEL_REGISTRY_TRANSFORMERS_CDN` | jsDelivr | CDN base URL for Transformers.js (air-gap) |
+| `MODEL_REGISTRY_WEBLLM_CDN` | jsDelivr | CDN base URL for WebLLM |
+| `MODEL_REGISTRY_TRANSFORMERS_CDN` | jsDelivr | CDN base URL for Transformers.js |
 | `MODEL_REGISTRY_WEBLLM_MODEL` | `Llama-3.2-3B-Instruct-q4f16_1-MLC` | WebGPU model ID |
 
-The model cache persists across restarts in `~/.agent_capsule_browser` (Chromium user-data dir), so subsequent starts load from disk in seconds.
+The model cache persists across restarts in `~/.agent_capsule_browser` (Chromium user-data dir).
 
 ## Project structure
 
 ```
-browser-agent-poc/
-├── index.html              # entry point
-├── style.css               # flat, minimal UI
+agent_capsule/
+├── index.html              # entry point — no build step
+├── style.css               # flat, minimal UI (light/dark)
 ├── agent/
 │   ├── agent.js            # ReAct loop
 │   ├── adapter/
@@ -176,38 +183,39 @@ browser-agent-poc/
 │   │   ├── retriever.js    # vector retrieval tool
 │   │   └── summarizer.js   # summarization tool
 │   └── memory/
-│       ├── store.js        # in-memory + localStorage
+│       ├── store.js        # in-memory vector store + localStorage metadata cache
 │       └── embedder.js     # chunk embedder
 ├── ui/
-│   ├── upload.js           # drag-and-drop ingestion
+│   ├── upload.js           # drag-and-drop ingestion + PDF parsing
 │   ├── chat.js             # chat panel
 │   └── status.js           # progress bar + runtime badge
 └── runner/
     ├── chromium.js         # Playwright Chromium controller
     ├── a2a.js              # A2A JSON-RPC 2.0 server
-    └── start.js            # entry point
+    └── start.js            # headless entry point
 ```
 
 ---
 
-## What is OpenSpec?
+## Development workflow (OpenSpec)
 
-OpenSpec is a spec-driven development framework built into this repo. Every feature or bugfix starts with a spec file — no spec, no code. Specs define acceptance criteria, test plans, and the domain skill to use during implementation.
+Every change to Agent Capsule starts with a spec file — no spec, no code. Specs live in `.openspec/specs/` and define acceptance criteria, test plans, and the implementation skill to use.
 
-**Layers of enforcement:**
+```bash
+bash setup.sh   # install git hooks
+```
+
+### CI enforcement layers
 
 | Layer | When | What |
 |---|---|---|
-| Git hook (local) | `git commit` | Blocks commits with source changes but no spec |
-| Pre-commit framework (optional) | `git commit` | Runs gitleaks, yamllint, markdownlint, shellcheck |
-| CI — deterministic | Every PR | Validates spec fields, status, test_plan, and runs the test suite |
-| CI — agentic | Every PR | AI checks if the implementation actually satisfies the spec |
-| CI — security | Every PR | CodeQL SAST, gitleaks secret scan, dependency review |
-| CI — supply chain | Every release | CycloneDX SBOM generation |
+| Git hook | `git commit` | Blocks commits with source changes but no spec |
+| CI — deterministic | Every PR | Validates spec fields, status, test plan; runs tests |
+| CI — agentic | Every PR | AI checks if the implementation satisfies the spec |
+| CI — security | Every PR | CodeQL, gitleaks, dependency review |
+| CI — supply chain | Every release | CycloneDX SBOM |
 
----
-
-## How it works
+### Workflow
 
 ```mermaid
 flowchart TD
@@ -217,188 +225,43 @@ flowchart TD
     D --> E{status = review?}
     B -- Yes --> E
     E -- draft --> D
-    E -- review/approved --> F["/openspec-implement\ninvokes domain skill if set"]
+    E -- review/approved --> F["/openspec-implement"]
     F --> G[Write tests per test_plan]
     G --> H([Open PR])
-    H --> I[spec-check.yml\ndeterministic gate]
-    H --> J[spec-ai-review.yml\nagentic alignment check]
-    I --> K{All checks pass?}
-    J --> K
-    K -- No --> F
-    K -- Yes --> L([Merge])
+    H --> I[spec-check + tests + CodeQL]
+    I --> J{All checks pass?}
+    J -- No --> F
+    J -- Yes --> L([Merge])
 ```
 
----
-
-## Quick start
-
-### 1. Configure this repo
-
-Open it in [Claude Code](https://claude.ai/code) — it detects the unconfigured state and interviews you automatically.
-
-Or configure manually:
-
-```bash
-# Edit the five required fields
-vi .openspec/config.yaml
-
-# Install git hooks
-bash setup.sh
-```
-
-### 2. Set your personal defaults (optional)
-
-Fill in `.openspec/defaults.yaml` once — onboarding will skip questions you've already answered:
-
-```yaml
-owner: "your-github-org"
-team: "your-team"
-test_command: "npm test"
-default_implementation_skill: "frontend-pro"  # or backend-pro, devops-pro, etc.
-```
-
-### 3. Create your first spec
-
-```bash
-gh openspec scaffold "my first feature"
-# or in Claude Code:
-/openspec-scaffold my first feature
-```
-
-### 4. Implement with the right domain skill
-
-```bash
-# In Claude Code — reads the spec, invokes implementation_skill if set
-/openspec-implement my-first-feature
-```
-
-### 5. Validate before pushing
-
-```bash
-gh openspec check           # validate all specs
-gh openspec check --strict  # treat warnings as errors
-gh openspec check --pr 42   # check a specific PR
-```
-
----
-
-## Claude Code skills
-
-Three project skills are available in any Claude Code session:
+### Claude Code skills
 
 | Skill | What it does |
 |---|---|
-| `/openspec-scaffold [feature]` | Guided spec creation — reads defaults, scaffolds file, validates required fields |
-| `/openspec-implement [slug]` | Reads spec, checks status, invokes domain skill, implements + writes tests |
-| `/openspec-check` | Validates spec coverage for current staged changes |
+| `/openspec-scaffold [feature]` | Scaffold a new spec file |
+| `/openspec-implement [slug]` | Read spec, invoke domain skill, implement + write tests |
+| `/openspec-check` | Validate spec coverage for current staged changes |
+
+### Spec file format
+
+Required fields: `title`, `description`, `acceptance_criteria`, `test_plan`, `status`
+
+Status lifecycle: `draft` → `review` → `approved`
+
+See `.openspec/specs/example-feature.spec.yaml` for a reference.
 
 ---
-
-## Project structure
-
-```
-.openspec/
-├── config.yaml              # Project configuration and enforcement settings
-├── defaults.yaml            # Personal/team defaults (fill in once)
-├── onboarding.yaml          # Questions Claude Code asks during first-time setup
-├── specs/                   # Active spec files (one per feature/bugfix)
-│   └── example-feature.spec.yaml
-└── templates/
-    ├── feature.spec.yaml
-    └── bugfix.spec.yaml
-
-.github/
-├── workflows/
-│   ├── spec-check.yml           # Deterministic CI gate + test runner
-│   ├── spec-ai-review.yml       # Agentic semantic review
-│   ├── spec-bootstrap.yml       # First-push setup reminder
-│   ├── repo-init.yml            # Creates `main` branch on new repos from template
-│   ├── codeql.yml               # Static analysis (SAST)
-│   ├── secret-scan.yml          # Gitleaks secret scanning
-│   ├── dependency-review.yml    # Vulnerable / disallowed-license deps
-│   ├── sbom.yml                 # CycloneDX SBOM on release
-│   ├── labeler.yml              # Path-based PR labels
-│   ├── release-drafter.yml      # Auto-drafted release notes
-│   └── stale.yml                # Stale issue/PR bot
-├── ISSUE_TEMPLATE/
-│   ├── bug_report.yml
-│   ├── feature_request.yml
-│   ├── spec_question.yml
-│   └── config.yml
-├── agents/
-│   └── spec-review.md           # AI agent goal file
-├── CODEOWNERS                   # Ownership matrix
-├── FUNDING.yml                  # Sponsor links
-├── AGENTS.md                    # Instructions for AI agents
-├── copilot-instructions.md      # GitHub Copilot instructions
-├── dependabot.yml               # Weekly dependency updates
-├── labeler.yml                  # Rules for path-based labelling
-├── pull_request_template.md     # Structured PR template
-└── release-drafter.yml          # Release-notes grouping config
-
-.claude/
-├── commands/
-│   ├── openspec-scaffold.md
-│   ├── openspec-implement.md
-│   └── openspec-check.md
-├── hooks/
-│   └── require-spec-on-commit.sh
-└── settings.json
-
-docs/
-└── BRANCH_PROTECTION.md         # Recommended ruleset configuration
-
-Governance (repo root):
-├── SECURITY.md                  # Vulnerability disclosure policy
-├── CONTRIBUTING.md              # Contribution guide (spec-first)
-├── CODE_OF_CONDUCT.md           # Contributor Covenant v2.1
-├── SUPPORT.md                   # Support channels
-├── CHANGELOG.md                 # Keep-a-Changelog
-├── .gitignore                   # Multi-language defaults
-├── .gitattributes               # Line endings + linguist hints
-├── .editorconfig                # Editor formatting rules
-├── .pre-commit-config.yaml      # Optional pre-commit hooks
-└── .yamllint                    # YAML lint rules
-```
 
 ## Governance
 
 | File | Purpose |
 |---|---|
 | [SECURITY.md](SECURITY.md) | Report a vulnerability privately |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute — spec-first |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guide — spec-first |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Contributor Covenant v2.1 |
 | [SUPPORT.md](SUPPORT.md) | Where to get help |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
-| [.github/CODEOWNERS](.github/CODEOWNERS) | Ownership matrix |
-| [docs/BRANCH_PROTECTION.md](docs/BRANCH_PROTECTION.md) | Recommended GitHub rulesets |
-
----
-
-## Spec file format
-
-See `.openspec/specs/example-feature.spec.yaml` for a fully filled-in reference.
-
-Required fields: `title`, `description`, `acceptance_criteria`, `test_plan`, `status`
-
-Status lifecycle: `draft` → `review` → `approved`
-
-> Code can only be written when status is `review` or `approved`.
-
----
-
-## Coding Guidelines
-
-This project follows the [Karpathy-Inspired Coding Guidelines](https://github.com/forrestchang/andrej-karpathy-skills) — four principles derived from [Andrej Karpathy's observations](https://x.com/karpathy/status/2015883857489522876) on common LLM coding pitfalls:
-
-| Principle | What it addresses |
-|---|---|
-| **Think Before Coding** | Wrong assumptions, hidden confusion, missing tradeoffs |
-| **Simplicity First** | Overcomplication, bloated abstractions |
-| **Surgical Changes** | Orthogonal edits, touching code you shouldn't |
-| **Goal-Driven Execution** | Leverage through tests-first, verifiable success criteria |
-
-These guidelines are integrated into [`CLAUDE.md`](CLAUDE.md) and work alongside OpenSpec — Principle 4 (Goal-Driven Execution) is structurally enforced through spec `acceptance_criteria` and `test_plan` fields.
+| [docs/BRANCH_PROTECTION.md](docs/BRANCH_PROTECTION.md) | Recommended branch ruleset config |
 
 ---
 
