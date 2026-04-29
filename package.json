@@ -1,0 +1,15 @@
+{
+  "name": "agent-capsule",
+  "version": "0.1.0",
+  "description": "Private local agent + swappable model runtime + same logic everywhere",
+  "scripts": {
+    "start": "serve . --no-clipboard -l tcp://0.0.0.0:${PORT:-3000}",
+    "dev": "serve . --no-clipboard -p 3000"
+  },
+  "dependencies": {
+    "serve": "^14.2.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

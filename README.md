@@ -28,12 +28,31 @@ Read this before filing a bug.
 
 ## Install and run
 
-No build step, no bundler, no install.
+**Local**
+
+```bash
+npm install   # installs `serve`
+npm run dev   # http://localhost:3000
+```
+
+Or without installing anything:
 
 ```bash
 npx serve .
-# open http://localhost:3000
 ```
+
+**Deploy to Railway**
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new)
+
+1. Push this repo to GitHub.
+2. In Railway: **New Project → Deploy from GitHub repo** → pick your fork.
+3. Railway detects Node.js via `package.json`, runs `npm install`, and starts `npm start`.
+4. Railway injects `PORT` automatically — no config needed.
+
+The app serves the static files. Model weights are fetched from CDN by the visitor's browser on first use — the Railway instance itself is stateless and tiny (serves ~30 KB of HTML/JS/CSS).
+
+> **Note:** Railway's hosted environment cannot run the headless A2A runner (`runner/`) — that requires a Chromium install. The static UI works fine from any static host.
 
 | Browser | Runtime | Notes |
 |---|---|---|
