@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Browser Agent — Private Document Q&A</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ── Status bar ── -->
+<header id="status-bar">
+  <span class="status-runtime" data-runtime="">Loading…</span>
+  <span class="status-model">—</span>
+  <div class="status-progress-wrap" hidden>
+    <div class="status-progress-track">
+      <div class="status-progress-bar"></div>
+    </div>
+    <span class="status-progress-text"></span>
+  </div>
+  <span class="status-chunks">0 chunks</span>
+</header>
+
+<!-- ── Main layout ── -->
+<main id="app">
+
+  <!-- Left panel: document upload -->
+  <section id="panel-upload">
+    <div id="drop-zone">
+      <span class="upload-icon">📄</span>
+      <p class="upload-hint">Drag a PDF, TXT, or MD file here,<br>or click to browse</p>
+      <p class="upload-info"></p>
+      <input id="file-input" type="file" accept=".pdf,.txt,.md" style="display:none" />
+    </div>
+    <button class="btn-clear" hidden>✕ Clear document</button>
+  </section>
+
+  <!-- Right panel: chat -->
+  <section id="panel-chat">
+    <div id="thread"></div>
+    <form id="input-form">
+      <textarea
+        id="query-input"
+        placeholder="Ask a question about your document…"
+        rows="1"
+        disabled
+      ></textarea>
+      <button id="btn-send" type="submit" disabled>Send</button>
+    </form>
+  </section>
+
+</main>
+
+<script type="module">
+import { createAdapter }  from './agent/adapter/index.js'
+import { MemoryStore }    from './agent/memory/store.js'
+import { Embedder }       from './agent/memory/embedder.js'
+import { Agent }          from './agent/agent.js'
+import { StatusBar }      from './ui/status.js'
+import { UploadPanel }    from './ui/upload.js'
+import { ChatPanel }      from './ui/chat.js'
+
+// ── Bootstrap ──────────────────────────────────────────────────────────────
+
+const statusBar = new StatusBar(document.getElementById('status-bar'))
+statusBar.setLoading()
+
+let adapter, store, embedder, agent
+
+async function init() {
+  adapter = await createAdapter((report) => statusBar.setProgress(report))
+  store   = new MemoryStore()
+  embedder = new Embedder(adapter)
+  agent    = new Agent(adapter, store)
+
+  statusBar.setAdapter(adapter)
+  statusBar.setChunkCount(0)
+
+  // Enable input once model is ready
+  const textarea = document.getElementById('query-input')
+  const sendBtn  = document.getElementById('btn-send')
+  textarea.disabled = false
+  sendBtn.disabled  = false
+  textarea.placeholder = 'Ask a question about your document…'
+}
+
+init().catch((err) => {
+  console.error('[init] failed to load adapter:', err)
+  statusBar.setProgress({ text: `Load failed: ${err.message}`, progress: 0 })
+})
+
+// ── Upload panel ────────────────────────────────────────────────────────────
+
+new UploadPanel(
+  document.getElementById('drop-zone'),
+  document.getElementById('file-input'),
+  async (chunks, meta) => {
+    // Delegate file input click when clicking inside the drop zone
+    statusBar.setChunkCount(0)
+    const embedded = await embedder.embedChunks(chunks, meta)
+    store.ingest(embedded, meta.hash)
+    statusBar.setChunkCount(store.size())
+  },
+  () => {
+    store.clear()
+    statusBar.setChunkCount(0)
+  }
+)
+
+// Make the drop zone trigger the hidden file input on click
+document.getElementById('drop-zone').addEventListener('click', (e) => {
+  if (e.target.closest('.btn-clear')) return
+  document.getElementById('file-input').click()
+})
+
+// ── Chat panel ───────────────────────────────────────────────────────────────
+
+new ChatPanel(
+  document.getElementById('thread'),
+  document.getElementById('input-form'),
+  async (query) => {
+    const result = await agent.run(query)
+    return {
+      answer:      result.answer,
+      latencyMs:   result.latencyMs,
+      runtimeName: adapter.runtimeName(),
+      modelName:   adapter.modelName()
+    }
+  }
+)
+</script>
+</body>
+</html>

@@ -12,12 +12,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 project:
-  name: "{{PROJECT_NAME}}"
-  owner: "{{GITHUB_OWNER}}"
-  team: "{{TEAM_NAME}}"
-  domain: "{{PROJECT_DOMAIN}}"
-  description: "{{PROJECT_DESCRIPTION}}"
-  tech_stack: "{{TECH_STACK}}"   # comma-separated, e.g. "python, fastapi, docker"
+  name: "browser-agent-poc"
+  owner: "arananet"
+  team: "arananet"
+  domain: "browser-ai"
+  description: "A browser-native AI agent for private document Q&A running entirely client-side using WebGPU/WASM with a portable model adapter interface"
+  tech_stack: "javascript"   # comma-separated, e.g. "python, fastapi, docker"
 
 spec:
   required_fields:
@@ -37,7 +37,7 @@ spec:
 
 testing:
   require_tests: true
-  test_command: "{{TEST_COMMAND}}"
+  test_command: "npx serve ."
   coverage_threshold: null
   fail_on_missing_tests: true
 

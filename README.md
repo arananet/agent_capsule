@@ -1,8 +1,100 @@
-# {{PROJECT_NAME}}
+# browser-agent-poc
 
-{{BADGES}}
+![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black) ![OpenSpec](https://img.shields.io/badge/OpenSpec-enforced-blueviolet) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-{{PROJECT_DESCRIPTION}}
+A browser-native AI agent for private document Q&A running entirely client-side using WebGPU/WASM with a portable model adapter interface.
+
+## Running the agent
+
+```bash
+npx serve .
+# open http://localhost:3000
+```
+
+No build step. No bundler. No install. Upload a PDF or text file and ask questions — nothing leaves your browser.
+
+## Browser requirements
+
+| Browser | Runtime | Notes |
+|---|---|---|
+| Chrome 113+ / Edge 113+ | WebGPU | Recommended — hardware-accelerated |
+| Firefox / Safari | WASM | Slower first load, same API |
+
+## First load
+
+Model weights download on first use (~2 GB for Phi-3-mini via WebGPU). Cached in the browser cache after the first download.
+
+## Architecture
+
+```mermaid
+graph TD
+    User([User]) -->|uploads file| Upload[ui/upload.js]
+    User -->|asks question| Chat[ui/chat.js]
+
+    Upload -->|chunks| Ingestion[Document Ingestion]
+    Ingestion -->|embed chunks| Embedder[agent/memory/embedder.js]
+    Embedder -->|store vectors| Store[agent/memory/store.js]
+
+    Chat -->|query| Agent[agent/agent.js ReAct loop]
+    Agent -->|retrieve top-K| Store
+    Agent -->|generate answer| Adapter[ModelAdapter]
+
+    Adapter -->|WebGPU available| WebLLM[agent/adapter/webllm.js]
+    Adapter -->|WASM fallback| Transformers[agent/adapter/transformers.js]
+
+    Status[ui/status.js] -->|runtime badge + progress| User
+```
+
+## Model Adapter
+
+The `ModelAdapter` interface (`agent/adapter/base.js`) is the only abstraction between agent logic and the model runtime. Agent and tool code calls only:
+
+- `adapter.generate(messages, options)` — text generation
+- `adapter.embed(text)` — returns `Float32Array`
+- `adapter.toolCall(messages, tools)` — structured tool call
+
+To add a new runtime, extend `ModelAdapter` and update the factory in `agent/adapter/index.js`. No other files change.
+
+## Extending to edge / cloud
+
+```js
+import { ModelAdapter } from './agent/adapter/base.js'
+
+export class MyCloudAdapter extends ModelAdapter {
+  async generate(messages, options = {}) { /* call your API */ }
+  async embed(text) { /* call your embedding API */ }
+  async toolCall(messages, tools) { /* ... */ }
+  runtimeName() { return 'MyCloud' }
+  modelName()   { return 'my-model-v1' }
+  isReady()     { return this._ready }
+}
+```
+
+## Project structure
+
+```
+browser-agent-poc/
+├── index.html              # entry point
+├── style.css               # flat, minimal UI
+├── agent/
+│   ├── agent.js            # ReAct loop
+│   ├── adapter/
+│   │   ├── base.js         # ModelAdapter interface
+│   │   ├── webllm.js       # WebGPU implementation
+│   │   ├── transformers.js # WASM fallback
+│   │   └── index.js        # auto-detect factory
+│   ├── tools/
+│   │   ├── registry.js     # ToolRegistry
+│   │   ├── retriever.js    # vector retrieval tool
+│   │   └── summarizer.js   # summarization tool
+│   └── memory/
+│       ├── store.js        # in-memory + localStorage
+│       └── embedder.js     # chunk embedder
+└── ui/
+    ├── upload.js           # drag-and-drop ingestion
+    ├── chat.js             # chat panel
+    └── status.js           # progress bar + runtime badge
+```
 
 ---
 

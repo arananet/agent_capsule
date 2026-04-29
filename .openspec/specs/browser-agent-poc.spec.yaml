@@ -1,0 +1,67 @@
+# Feature Spec — Browser-Native Portable Agent PoC
+
+title: "Browser-Native Portable Agent PoC"
+slug: "browser-agent-poc"
+type: feature
+status: review
+
+author: "arananet"
+created_at: "2026-04-29"
+updated_at: "2026-04-29"
+
+description: |
+  Build a self-contained browser-native AI agent that runs a Small Language Model
+  entirely client-side using WebGPU/WASM, with a ModelAdapter interface that allows
+  the same agent logic to resolve to browser, edge, or cloud runtimes without code
+  changes. The PoC use case is private document Q&A: the user uploads a PDF or text
+  file and the agent answers questions about it entirely in-browser. No data ever
+  leaves the client.
+
+acceptance_criteria:
+  - "Given a PDF, TXT, or MD file is uploaded, the agent chunks, embeds, and stores it without any network call for the document data"
+  - "Given a loaded document, when the user asks a question, the agent answers using only retrieved context chunks (verifiable by disconnecting network after model loads)"
+  - "Given WebGPU is available in the browser, the UI shows a 'WebGPU' runtime badge; when unavailable it shows 'WASM' and falls back automatically"
+  - "Given a new runtime is added by extending ModelAdapter and updating the adapter factory, agent.js and all tool files require zero changes"
+  - "ModelAdapter.generate(), .embed(), and .toolCall() are the only model-touching APIs called from agent.js and tool files"
+  - "Given the project directory, running `npx serve .` serves a working app with no build step required"
+
+test_plan:
+  - "Unit test: ModelAdapter base class throws 'not implemented' for generate(), embed(), and toolCall()"
+  - "Unit test: MemoryStore.ingest() stores chunks and MemoryStore.query() returns top-K by cosine similarity"
+  - "Unit test: cosine similarity function returns 1.0 for identical vectors and ~0 for orthogonal vectors"
+  - "Unit test: ToolRegistry.register() and execute() dispatch to the correct handler"
+  - "Unit test: chunk sliding-window function produces correct overlap between consecutive chunks"
+  - "Integration test: Upload a plain text file, ingest it, query it, verify returned chunks contain relevant text"
+  - "Integration test: agent ReAct loop terminates within max-iteration limit even without a tool_call response"
+  - "Manual E2E: Open in Chrome 113+, upload a PDF, ask 3 questions, verify answers are grounded in document content"
+
+qa_notes: |
+  - Test WebGPU path in Chrome 113+ / Edge 113+
+  - Test WASM fallback in Firefox / Safari
+  - Verify no document text appears in browser DevTools network tab after model load
+  - Verify localStorage retains chunk metadata across page refreshes for the same file
+  - Verify "Thinking..." skeleton appears while generating
+  - Test drag-and-drop and file-input upload methods
+
+out_of_scope:
+  - Server-side processing or cloud storage of documents
+  - User authentication or multi-user support
+  - Persistent chat history across browser sessions
+  - Support for image-only PDFs (no OCR)
+  - Production hardening, rate limiting, or abuse prevention
+  - TypeScript or bundler tooling
+
+implementation_skill: null
+
+technical_notes: |
+  - No bundler, no build step — pure ES modules via <script type="module">
+  - Import WebLLM from https://esm.run/@mlc-ai/web-llm (pinned version)
+  - Import Transformers.js from https://cdn.jsdelivr.net/npm/@xenova/transformers (pinned)
+  - Import PDF.js from https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.269/pdf.min.mjs
+  - Default generation model: Phi-3-mini-4k-instruct-q4f16_1-MLC (WebGPU) or Xenova/Phi-3-mini-4k-instruct (WASM)
+  - Embedding model: Xenova/all-MiniLM-L6-v2 (always via Transformers.js)
+  - ReAct loop max iterations: 4
+  - Chunk size: 512 tokens (~400 words), 20% overlap
+
+linked_issues: []
+linked_prs: []
