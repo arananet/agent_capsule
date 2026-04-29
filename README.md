@@ -4,6 +4,12 @@
 
 A browser-native AI agent for private document Q&A running entirely client-side using WebGPU/WASM with a portable model adapter interface.
 
+## Screenshot
+
+![CV Q&A example — WebGPU runtime](screenshots/cv-review.png)
+
+*Uploading a CV and querying work experience entirely in-browser, no data leaves the client.*
+
 ## Running the agent
 
 ```bash
@@ -22,7 +28,7 @@ No build step. No bundler. No install. Upload a PDF or text file and ask questio
 
 ## First load
 
-Model weights download on first use (~2 GB for Phi-3-mini via WebGPU). Cached in the browser cache after the first download.
+Model weights download on first use (~2 GB for Llama-3.2-3B via WebGPU). Cached in the browser cache after the first download.
 
 ## Architecture
 
@@ -53,7 +59,7 @@ The `ModelAdapter` interface (`agent/adapter/base.js`) is the only abstraction b
 - `adapter.embed(text)` — returns `Float32Array`
 - `adapter.toolCall(messages, tools)` — structured tool call
 
-To add a new runtime, extend `ModelAdapter` and update the factory in `agent/adapter/index.js`. No other files change.
+To add a new runtime, extend `ModelAdapter` and update `agent/adapter/index.js`. No other files change.
 
 ## Extending to edge / cloud
 
@@ -70,6 +76,87 @@ export class MyCloudAdapter extends ModelAdapter {
 }
 ```
 
+## Headless / A2A mode
+
+The agent runs in a real Chromium process with no visible UI and exposes an A2A JSON-RPC 2.0 HTTP endpoint that other agents or automation pipelines can call.
+
+```bash
+cd runner
+npm install
+npx playwright install chromium
+node start.js
+# A2A endpoint: http://localhost:8080
+```
+
+Send a task:
+
+```bash
+curl -X POST http://localhost:8080 \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tasks/send",
+    "id": "1",
+    "params": {
+      "id": "task-001",
+      "message": {
+        "role": "user",
+        "parts": [{ "kind": "text", "text": "Summarise this document." }]
+      }
+    }
+  }'
+```
+
+Retrieve a completed task by ID:
+
+```bash
+curl -X POST http://localhost:8080 \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"tasks/get","id":"2","params":{"id":"task-001"}}'
+```
+
+### Runtime selection in headless mode
+
+Headless Chromium uses SwiftShader as its GPU backend, which does **not** support the `shader-f16` WGSL extension required by the default WebGPU model. The runner therefore masks `navigator.gpu` on startup so the adapter auto-selects the WASM/Transformers.js path — the same fallback that runs in Firefox or Safari.
+
+Additionally, TinyLlama's KV-cache tensors exceed the ONNX Runtime WebAssembly buffer limits inside Playwright's sandboxed renderer. For headless use, override the generation model to a smaller one via the `MODEL_REGISTRY_GEN_MODEL` env var:
+
+```bash
+# Recommended for headless: distilgpt2 (82 MB, 6 transformer layers)
+MODEL_REGISTRY_GEN_MODEL=Xenova/distilgpt2 node runner/start.js
+```
+
+For full Q&A quality with an uploaded document, run the interactive browser UI instead (Chrome 113+ with WebGPU), or provide a self-hosted model server via the registry env vars below.
+
+### Air-gap / offline deployment
+
+All model CDN URLs and model IDs live in `agent/adapter/registry.js` which checks `window.__MODEL_REGISTRY__` at startup. The runner injects this object before any module loads:
+
+```bash
+MODEL_REGISTRY_WEBLLM_CDN=http://registry.internal/web-llm/esm \
+MODEL_REGISTRY_TRANSFORMERS_CDN=http://registry.internal/transformers \
+MODEL_REGISTRY_WEBLLM_MODEL=Llama-3.2-3B-Instruct-q4f16_1-MLC \
+MODEL_REGISTRY_GEN_MODEL=Xenova/distilgpt2 \
+node runner/start.js
+```
+
+Nothing changes in the agent or adapter code — only the URLs the models are fetched from.
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `APP_PORT` | `3000` | Port for the static app server |
+| `A2A_PORT` | `8080` | Port for the A2A JSON-RPC endpoint |
+| `MODEL_TIMEOUT_MS` | `300000` | Max ms to wait for the model to load |
+| `MODEL_REGISTRY_GEN_MODEL` | `Xenova/TinyLlama-1.1B-Chat-v1.0` | Generation model (override for headless) |
+| `MODEL_REGISTRY_EMBED_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model |
+| `MODEL_REGISTRY_WEBLLM_CDN` | jsDelivr | CDN base URL for WebLLM (air-gap) |
+| `MODEL_REGISTRY_TRANSFORMERS_CDN` | jsDelivr | CDN base URL for Transformers.js (air-gap) |
+| `MODEL_REGISTRY_WEBLLM_MODEL` | `Llama-3.2-3B-Instruct-q4f16_1-MLC` | WebGPU model ID |
+
+The model cache persists across restarts in `~/.agent_capsule_browser` (Chromium user-data dir), so subsequent starts load from disk in seconds.
+
 ## Project structure
 
 ```
@@ -80,9 +167,10 @@ browser-agent-poc/
 │   ├── agent.js            # ReAct loop
 │   ├── adapter/
 │   │   ├── base.js         # ModelAdapter interface
+│   │   ├── registry.js     # CDN / model-ID config (air-gap hook)
 │   │   ├── webllm.js       # WebGPU implementation
 │   │   ├── transformers.js # WASM fallback
-│   │   └── index.js        # auto-detect factory
+│   │   └── index.js        # runtime auto-detection
 │   ├── tools/
 │   │   ├── registry.js     # ToolRegistry
 │   │   ├── retriever.js    # vector retrieval tool
@@ -90,10 +178,14 @@ browser-agent-poc/
 │   └── memory/
 │       ├── store.js        # in-memory + localStorage
 │       └── embedder.js     # chunk embedder
-└── ui/
-    ├── upload.js           # drag-and-drop ingestion
-    ├── chat.js             # chat panel
-    └── status.js           # progress bar + runtime badge
+├── ui/
+│   ├── upload.js           # drag-and-drop ingestion
+│   ├── chat.js             # chat panel
+│   └── status.js           # progress bar + runtime badge
+└── runner/
+    ├── chromium.js         # Playwright Chromium controller
+    ├── a2a.js              # A2A JSON-RPC 2.0 server
+    └── start.js            # entry point
 ```
 
 ---

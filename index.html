@@ -52,7 +52,7 @@
 </main>
 
 <script type="module">
-import { createAdapter }  from './agent/adapter/index.js'
+import { loadAdapter }   from './agent/adapter/index.js'
 import { MemoryStore }    from './agent/memory/store.js'
 import { Embedder }       from './agent/memory/embedder.js'
 import { Agent }          from './agent/agent.js'
@@ -68,7 +68,7 @@ statusBar.setLoading()
 let adapter, store, embedder, agent
 
 async function init() {
-  adapter = await createAdapter((report) => statusBar.setProgress(report))
+  adapter = await loadAdapter((report) => statusBar.setProgress(report))
   store   = new MemoryStore()
   embedder = new Embedder(adapter)
   agent    = new Agent(adapter, store)
@@ -82,6 +82,13 @@ async function init() {
   textarea.disabled = false
   sendBtn.disabled  = false
   textarea.placeholder = 'Ask a question about your document…'
+
+  // Headless / A2A bridge — the Chromium runner calls this instead of the UI
+  window.__agentSend = async (text) => {
+    const result = await agent.run(text)
+    return { answer: result.answer, latencyMs: result.latencyMs }
+  }
+  window.__agentReady = true
 }
 
 init().catch((err) => {

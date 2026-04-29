@@ -1,7 +1,5 @@
-import { ModelAdapter } from './base.js'
-
-const WEBLLM_CDN = 'https://esm.run/@mlc-ai/web-llm@0.2.73'
-const DEFAULT_MODEL = 'Phi-3-mini-4k-instruct-q4f16_1-MLC'
+import { ModelAdapter }   from './base.js'
+import { MODEL_REGISTRY } from './registry.js'
 
 export class WebLLMAdapter extends ModelAdapter {
   constructor(onProgress) {
@@ -13,10 +11,11 @@ export class WebLLMAdapter extends ModelAdapter {
   }
 
   async load() {
-    const { CreateMLCEngine } = await import(WEBLLM_CDN)
+    const { CreateMLCEngine } = await import(MODEL_REGISTRY.webllmCdn)
 
-    this._engine = await CreateMLCEngine(DEFAULT_MODEL, {
+    this._engine = await CreateMLCEngine(MODEL_REGISTRY.webllmModel, {
       initProgressCallback: (report) => {
+        console.info('[adapter] loading:', report.text)
         this._onProgress({
           text: report.text,
           progress: Math.round(report.progress * 100)
@@ -24,14 +23,13 @@ export class WebLLMAdapter extends ModelAdapter {
       }
     })
 
-    // WebLLM has no embedding API — delegate to Transformers.js
+    // Embedding delegated to Transformers.js — loaded on first embed() call only
     const { TransformersAdapter } = await import('./transformers.js')
     this._embedAdapter = new TransformersAdapter(null)
-    await this._embedAdapter.load()
 
     this._ready = true
     this._onProgress({ text: 'WebGPU model ready', progress: 100 })
-    console.info('[adapter] WebLLMAdapter ready — runtime: WebGPU, model:', DEFAULT_MODEL)
+    console.info('[adapter] WebLLMAdapter ready — runtime: WebGPU, model:', MODEL_REGISTRY.webllmModel)
   }
 
   async generate(messages, options = {}) {
@@ -46,6 +44,7 @@ export class WebLLMAdapter extends ModelAdapter {
 
   async embed(text) {
     if (!this._embedAdapter) throw new Error('WebLLMAdapter not loaded')
+    if (!this._embedAdapter._ready) await this._embedAdapter.loadEmbedOnly()
     return this._embedAdapter.embed(text)
   }
 
@@ -72,7 +71,7 @@ export class WebLLMAdapter extends ModelAdapter {
       return { content: msg.content || '' }
     } catch {
       // Model doesn't support native tool calling — fall back to prompt engineering
-      console.warn('[adapter] WebLLM native tool call failed, falling back to prompt engineering')
+      console.info('[adapter] WebLLM native tool call failed, falling back to prompt engineering')
       return this._promptToolCall(messages, tools)
     }
   }
@@ -82,13 +81,22 @@ export class WebLLMAdapter extends ModelAdapter {
       `Tool: ${t.name}\nDescription: ${t.description}\nParameters: ${JSON.stringify(t.parameters)}`
     ).join('\n\n')
 
-    const augmented = [
-      ...messages,
-      {
-        role: 'system',
-        content: `You have access to these tools. To call a tool respond ONLY with valid JSON:\n{"tool": "<name>", "args": {...}}\n\nIf no tool is needed, respond normally.\n\nTools:\n${toolDesc}`
-      }
-    ]
+    const toolInstruction = `You have access to these tools. To call a tool respond ONLY with valid JSON:\n{"tool": "<name>", "args": {...}}\n\nIf no tool is needed, respond normally.\n\nTools:\n${toolDesc}`
+
+    // System message must be first — merge into existing system msg or prepend one
+    let augmented
+    if (messages.length > 0 && messages[0].role === 'system') {
+      augmented = [
+        { role: 'system', content: messages[0].content + '\n\n' + toolInstruction },
+        ...messages.slice(1)
+      ]
+    } else {
+      augmented = [
+        { role: 'system', content: toolInstruction },
+        ...messages
+      ]
+    }
+
     const text = await this.generate(augmented)
 
     const jsonMatch = text.match(/\{[\s\S]*"tool"[\s\S]*\}/)
@@ -104,6 +112,6 @@ export class WebLLMAdapter extends ModelAdapter {
   }
 
   runtimeName() { return 'WebGPU' }
-  modelName()   { return DEFAULT_MODEL }
+  modelName()   { return MODEL_REGISTRY.webllmModel }
   isReady()     { return this._ready }
 }

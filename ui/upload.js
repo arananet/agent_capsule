@@ -1,4 +1,5 @@
 const PDFJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.269/pdf.min.mjs'
+const PDFJS_WORKER_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.269/pdf.worker.min.mjs'
 const CHUNK_WORDS = 400    // ~512 tokens
 const OVERLAP_RATIO = 0.2  // 20% overlap
 
@@ -92,8 +93,7 @@ export class UploadPanel {
  */
 async function extractPDF(file) {
   const { getDocument, GlobalWorkerOptions } = await import(PDFJS_CDN)
-  // Disable the worker to avoid needing a separate worker file
-  GlobalWorkerOptions.workerSrc = ''
+  GlobalWorkerOptions.workerSrc = PDFJS_WORKER_CDN
 
   const arrayBuffer = await file.arrayBuffer()
   const pdf = await getDocument({ data: arrayBuffer }).promise

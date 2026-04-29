@@ -16,6 +16,13 @@ export class ChatPanel {
       e.preventDefault()
       this._handleSubmit()
     })
+
+    this._form.querySelector('textarea')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        this._handleSubmit()
+      }
+    })
   }
 
   async _handleSubmit() {

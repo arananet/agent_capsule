@@ -4,7 +4,8 @@ import { registerSummarizer } from './tools/summarizer.js'
 
 const MAX_ITERATIONS = 4
 
-const SYSTEM_PROMPT_TEMPLATE = (chunks) => `\
+const SYSTEM_PROMPT_TEMPLATE = (chunks) => chunks
+  ? `\
 You are a precise document assistant. Answer only from the provided context.
 If the context does not contain the answer, say so explicitly.
 
@@ -15,6 +16,10 @@ Rules:
 - Cite the chunk index when quoting (e.g. [Chunk 3])
 - If uncertain, say uncertain
 - Do not hallucinate facts outside the context`
+  : `\
+You are a private document assistant that runs entirely in the browser.
+No document has been uploaded yet. Introduce yourself and explain that the user
+can upload a PDF to ask questions about its content.`
 
 /**
  * Core agent — ReAct loop (Reason → Act → Observe → Repeat).
@@ -42,12 +47,13 @@ export class Agent {
   async run(userQuery, onThought) {
     const t0 = Date.now()
 
-    // Step 1: Retrieve initial context
-    const queryVector = await this._adapter.embed(userQuery)
-    const topChunks   = this._store.query(queryVector, 5)
+    // Step 1: Retrieve initial context (skip embed when no documents are loaded)
+    const topChunks = this._store.size() > 0
+      ? await this._adapter.embed(userQuery).then(v => this._store.query(v, 5))
+      : []
     const contextText = topChunks.length
       ? topChunks.map(r => `[Chunk ${r.metadata.chunkIndex}]\n${r.text}`).join('\n\n---\n\n')
-      : '(no document loaded)'
+      : null
 
     // Build message history for the loop
     const messages = [

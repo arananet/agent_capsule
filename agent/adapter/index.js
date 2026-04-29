@@ -1,9 +1,9 @@
 /**
- * Adapter factory — auto-detects the best available runtime.
+ * Adapter loader — auto-detects the best available runtime.
  * Add new runtimes by inserting checks before the WebGPU branch.
  * agent.js and all tool files require zero changes when runtimes change.
  */
-export async function createAdapter(onProgress) {
+export async function loadAdapter(onProgress) {
   const hasWebGPU = !!navigator.gpu
 
   if (hasWebGPU) {

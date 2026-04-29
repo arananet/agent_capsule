@@ -1,0 +1,16 @@
+{
+  "name": "agent-capsule-runner",
+  "version": "1.0.0",
+  "description": "Headless Chromium + A2A runner for the browser-native agent",
+  "type": "module",
+  "scripts": {
+    "start":            "node start.js",
+    "test":             "node test.js all",
+    "test:unit":        "node test.js unit",
+    "test:integration": "node test.js integration"
+  },
+  "dependencies": {
+    "playwright": "^1.43.0",
+    "serve-handler": "^6.1.5"
+  }
+}

@@ -1,0 +1,66 @@
+# Feature Spec — Headless Chromium A2A Runner
+
+title: "Headless Chromium A2A Runner"
+slug: "headless-a2a-runner"
+type: feature
+status: review
+
+author: "arananet"
+created_at: "2026-04-29"
+updated_at: "2026-04-29"
+
+description: |
+  Run the exact same browser-native WebGPU agent in a headless Chromium process
+  (no visible UI) and expose it as an A2A (Agent-to-Agent) JSON-RPC 2.0 HTTP
+  endpoint. No model code changes — Playwright drives the real Chromium runtime
+  and calls window.__agentSend() to interact with the agent.
+
+  All CDN and model-ID constants are centralised in agent/adapter/registry.js
+  and can be overridden at startup via window.__MODEL_REGISTRY__ (injected by
+  the runner before any ES module loads). This is the air-gap hook: set env
+  vars pointing at an internal model server and the agent runs with zero
+  internet dependency.
+
+acceptance_criteria:
+  - "Running `node runner/start.js` starts a static app server and an A2A HTTP server without errors"
+  - "A POST to the A2A endpoint with a tasks/send message returns a completed task with an agent reply part"
+  - "A POST to the A2A endpoint with tasks/get and a valid task ID returns the previously completed task"
+  - "The runner masks navigator.gpu so the adapter always selects the WASM path in headless Chromium (SwiftShader lacks shader-f16 support)"
+  - "Setting MODEL_REGISTRY_GEN_MODEL=Xenova/distilgpt2 overrides the generation model; the runner injects window.__MODEL_REGISTRY__ before any module loads"
+  - "Setting MODEL_REGISTRY_WEBLLM_CDN and related env vars redirects all model fetches to the specified URLs (air-gap support)"
+  - "No mention of 'factory' appears anywhere in source code, README, or specs"
+  - "window.__agentReady is set to true only after the adapter has fully loaded, and the runner waits for this before accepting A2A requests"
+  - "Model cache persists on disk under ~/.agent_capsule_browser via launchPersistentContext; subsequent starts load from disk without re-downloading"
+
+test_plan:
+  - "Unit: A2AServer._tasksend() with a mocked ChromiumRunner returns a task with status.state === 'completed' and a non-empty text part"
+  - "Unit: A2AServer._tasksend() with an empty parts array throws an error with message 'No text part in message'"
+  - "Unit: A2AServer tasks/get returns -32001 error when the task ID does not exist"
+  - "Unit: MODEL_REGISTRY reads window.__MODEL_REGISTRY__ overrides and falls back to CDN defaults when the property is absent"
+  - "Integration: start.js with MODEL_REGISTRY_GEN_MODEL=Xenova/distilgpt2 — verify tasks/send returns state=completed with a non-empty text part"
+  - "Integration: start.js with MODEL_REGISTRY_WEBLLM_CDN set — verify page.addInitScript injects the correct registry object (check via page.evaluate)"
+  - "Manual E2E: start runner with MODEL_REGISTRY_* env vars pointing at a local nginx serving cached model files — verify model loads without internet access"
+
+out_of_scope:
+  - Persistent task storage (tasks are in-memory, lost on restart)
+  - Authentication or authorisation on the A2A endpoint
+  - Streaming / server-sent-events responses
+  - Multi-agent orchestration or agent discovery
+  - Document ingestion via A2A (text-only queries for now)
+
+technical_notes: |
+  - runner/ has its own package.json with playwright and serve-handler dependencies
+  - Playwright is used only for Chromium launch — no test framework dependency
+  - The static app server (serve-handler) and A2A server are both plain Node.js http.createServer
+  - window.__agentSend is exposed in index.html after init() resolves; window.__agentReady is set alongside it
+  - The runner polls window.__agentReady in a manual loop (Node setTimeout) to avoid Playwright's internal 30 s default timeout
+  - Headless Chromium runtime constraint: SwiftShader does not implement the shader-f16 WGSL extension, so navigator.gpu is masked via page.addInitScript() and the adapter always selects Transformers.js/WASM
+  - TinyLlama's KV-cache tensors overflow the ONNX WASM buffer in Playwright's sandboxed renderer; use MODEL_REGISTRY_GEN_MODEL=Xenova/distilgpt2 for headless deployments
+  - Chromium launch uses launchPersistentContext (not launch) to store IndexedDB/Cache API on disk under ~/.agent_capsule_browser, lifting the in-memory quota cap and caching models between restarts
+  - Chromium launch args: --enable-unsafe-webgpu --disable-dawn-features=disallow_unsafe_apis --js-flags=--max-old-space-size=4096 --no-sandbox (Vulkan flags added on Linux only)
+  - A2A port default: 8080, configurable via A2A_PORT env var
+  - App port default: 3000, configurable via APP_PORT env var
+  - agent.run() skips embed() when store.size() === 0 — no document upload required for plain-text A2A queries
+
+linked_issues: []
+linked_prs: []

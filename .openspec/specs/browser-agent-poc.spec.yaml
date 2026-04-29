@@ -21,9 +21,11 @@ acceptance_criteria:
   - "Given a PDF, TXT, or MD file is uploaded, the agent chunks, embeds, and stores it without any network call for the document data"
   - "Given a loaded document, when the user asks a question, the agent answers using only retrieved context chunks (verifiable by disconnecting network after model loads)"
   - "Given WebGPU is available in the browser, the UI shows a 'WebGPU' runtime badge; when unavailable it shows 'WASM' and falls back automatically"
-  - "Given a new runtime is added by extending ModelAdapter and updating the adapter factory, agent.js and all tool files require zero changes"
+  - "Given a new runtime is added by extending ModelAdapter and updating agent/adapter/index.js, agent.js and all tool files require zero changes"
   - "ModelAdapter.generate(), .embed(), and .toolCall() are the only model-touching APIs called from agent.js and tool files"
   - "Given the project directory, running `npx serve .` serves a working app with no build step required"
+  - "Given the chat input is focused, pressing Enter submits the message; Shift+Enter inserts a newline"
+  - "Embedding model loads lazily on first file upload — chatting without uploading a file does not trigger embedding model download"
 
 test_plan:
   - "Unit test: ModelAdapter base class throws 'not implemented' for generate(), embed(), and toolCall()"
@@ -58,8 +60,8 @@ technical_notes: |
   - Import WebLLM from https://esm.run/@mlc-ai/web-llm (pinned version)
   - Import Transformers.js from https://cdn.jsdelivr.net/npm/@xenova/transformers (pinned)
   - Import PDF.js from https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.269/pdf.min.mjs
-  - Default generation model: Phi-3-mini-4k-instruct-q4f16_1-MLC (WebGPU) or Xenova/Phi-3-mini-4k-instruct (WASM)
-  - Embedding model: Xenova/all-MiniLM-L6-v2 (always via Transformers.js)
+  - Default generation model: Llama-3.2-3B-Instruct-q4f16_1-MLC (WebGPU) or Xenova/TinyLlama-1.1B-Chat-v1.0 (WASM, quantized)
+  - Embedding model: Xenova/all-MiniLM-L6-v2 (always via Transformers.js, quantized, lazy-loaded on first file upload)
   - ReAct loop max iterations: 4
   - Chunk size: 512 tokens (~400 words), 20% overlap
 

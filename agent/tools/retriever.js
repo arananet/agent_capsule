@@ -21,6 +21,7 @@ export function registerRetriever(registry, store, adapter) {
       required: ['query']
     },
     async ({ query, top_k = 5 }) => {
+      if (store.size() === 0) return 'No document has been uploaded yet.'
       const queryVector = await adapter.embed(query)
       const results = store.query(queryVector, top_k)
       if (!results.length) return 'No relevant chunks found in the document.'
